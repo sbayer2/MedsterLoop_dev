@@ -1,13 +1,68 @@
+"""
+MedsterLoop - Direct Anthropic SDK Implementation
+Replaces LangChain with native Anthropic client for cleaner, faster execution.
+"""
 import os
 import time
-from langchain_anthropic import ChatAnthropic
-from langchain_core.prompts import ChatPromptTemplate
+import json
+from typing import Type, List, Optional, Dict, Any, Union
 from pydantic import BaseModel
-from typing import Type, List, Optional, Union, Dict, Any
-from langchain_core.tools import BaseTool
-from langchain_core.messages import AIMessage, HumanMessage
+import anthropic
 
 from medster.prompts import DEFAULT_SYSTEM_PROMPT
+
+
+# Initialize Anthropic client
+_client: Optional[anthropic.Anthropic] = None
+
+
+def get_client() -> anthropic.Anthropic:
+    """Get or create Anthropic client singleton."""
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    return _client
+
+
+# Model name mapping
+MODEL_MAPPING = {
+    "claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
+    "claude-opus-4.5": "claude-opus-4-5-20251101",
+    "claude-haiku-4": "claude-haiku-4-20250107",
+}
+
+
+def convert_tools_to_anthropic_format(tools: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Convert tool objects to Anthropic's tool format.
+
+    Supports both:
+    - LangChain-style tools (for backward compatibility)
+    - Dict-based tool definitions (new style)
+    """
+    anthropic_tools = []
+    for tool in tools:
+        if isinstance(tool, dict):
+            # Already in dict format
+            anthropic_tools.append(tool)
+        elif hasattr(tool, 'name') and hasattr(tool, 'description'):
+            # LangChain-style tool object
+            tool_def = {
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+            # Extract schema from args_schema if available
+            if hasattr(tool, 'args_schema') and tool.args_schema:
+                schema = tool.args_schema.schema() if hasattr(tool.args_schema, 'schema') else {}
+                tool_def["input_schema"]["properties"] = schema.get("properties", {})
+                tool_def["input_schema"]["required"] = schema.get("required", [])
+            anthropic_tools.append(tool_def)
+    return anthropic_tools
 
 
 def call_llm(
@@ -15,54 +70,29 @@ def call_llm(
     model: str = "claude-sonnet-4.5",
     system_prompt: Optional[str] = None,
     output_schema: Optional[Type[BaseModel]] = None,
-    tools: Optional[List[BaseTool]] = None,
+    tools: Optional[List[Any]] = None,
     images: Optional[List[str]] = None,
-) -> AIMessage:
+    max_tokens: int = 4096,
+) -> Union[Dict[str, Any], Any]:
     """
     Call Claude LLM with the given prompt and configuration.
 
-    Args:
-        prompt: The user prompt to send
-        model: The model to use (default: claude-sonnet-4.5)
-        system_prompt: Optional system prompt override
-        output_schema: Optional Pydantic schema for structured output
-        tools: Optional list of tools to bind
-        images: Optional list of base64-encoded PNG images for vision analysis
+    Returns a dict with:
+    - content: str (text response)
+    - tool_calls: List[Dict] (if tools were called)
+    - stop_reason: str
+    - usage: Dict (token counts)
 
-    Returns:
-        AIMessage or structured output based on schema
+    Or if output_schema is provided, returns the parsed Pydantic object.
     """
+    client = get_client()
     final_system_prompt = system_prompt if system_prompt else DEFAULT_SYSTEM_PROMPT
+    anthropic_model = MODEL_MAPPING.get(model, "claude-sonnet-4-5-20250929")
 
-    # Map model names to Anthropic model IDs
-    model_mapping = {
-        "claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
-        "claude-opus-4.5": "claude-opus-4-5-20251101",
-        "claude-haiku-4": "claude-haiku-4-20250107",
-    }
-
-    anthropic_model = model_mapping.get(model, "claude-sonnet-4-5-20250929")
-
-    # Initialize Anthropic LLM
-    llm = ChatAnthropic(
-        model=anthropic_model,
-        temperature=0,
-        api_key=os.getenv("ANTHROPIC_API_KEY"),
-    )
-
-    # Add structured output or tools to the LLM
-    runnable = llm
-    if output_schema:
-        runnable = llm.with_structured_output(output_schema)
-    elif tools:
-        runnable = llm.bind_tools(tools)
-
-    # Build messages based on whether images are included
+    # Build message content
     if images:
         # Multimodal message with images
         content_parts: List[Dict[str, Any]] = [{"type": "text", "text": prompt}]
-
-        # Add each image to content (Anthropic native format)
         for img_base64 in images:
             content_parts.append({
                 "type": "image",
@@ -72,59 +102,150 @@ def call_llm(
                     "data": img_base64
                 }
             })
-
-        # Create multimodal message
-        messages = [
-            {"role": "system", "content": final_system_prompt},
-            {"role": "user", "content": content_parts}
-        ]
-
-        # Retry logic for transient connection errors and rate limits
-        max_retries = 6
-        for attempt in range(max_retries):
-            try:
-                return runnable.invoke(messages)
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "rate_limit" in error_str.lower():
-                    if attempt == max_retries - 1:
-                        raise
-                    # Exponential backoff for rate limits: 10s, 20s, 40s, 80s...
-                    wait_time = 10 * (2 ** attempt)
-                    print(f"Rate limit hit. Waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries})...")
-                    time.sleep(wait_time)
-                else:
-                    # Standard backoff for other errors
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(1 * (2 ** attempt))
-
+        messages = [{"role": "user", "content": content_parts}]
     else:
-        # Text-only message
-        prompt_template = ChatPromptTemplate.from_messages([
-            ("system", final_system_prompt),
-            ("user", "{prompt}")
-        ])
+        messages = [{"role": "user", "content": prompt}]
 
-        chain = prompt_template | runnable
+    # Build API call kwargs
+    api_kwargs = {
+        "model": anthropic_model,
+        "max_tokens": max_tokens,
+        "system": final_system_prompt,
+        "messages": messages,
+    }
 
-        # Retry logic for transient connection errors and rate limits
-        max_retries = 6
-        for attempt in range(max_retries):
-            try:
-                return chain.invoke({"prompt": prompt})
-            except Exception as e:
-                error_str = str(e)
-                if "429" in error_str or "rate_limit" in error_str.lower():
-                    if attempt == max_retries - 1:
-                        raise
-                    # Exponential backoff for rate limits: 10s, 20s, 40s, 80s...
-                    wait_time = 10 * (2 ** attempt)
-                    print(f"Rate limit hit. Waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries})...")
-                    time.sleep(wait_time)
-                else:
-                    # Standard backoff for other errors
-                    if attempt == max_retries - 1:
-                        raise
-                    time.sleep(1 * (2 ** attempt))
+    # Add tools if provided
+    if tools:
+        api_kwargs["tools"] = convert_tools_to_anthropic_format(tools)
 
+    # Retry logic for transient errors and rate limits
+    max_retries = 6
+    for attempt in range(max_retries):
+        try:
+            response = client.messages.create(**api_kwargs)
+            break
+        except anthropic.RateLimitError:
+            if attempt == max_retries - 1:
+                raise
+            wait_time = 10 * (2 ** attempt)
+            print(f"Rate limit hit. Waiting {wait_time}s before retry (attempt {attempt + 1}/{max_retries})...")
+            time.sleep(wait_time)
+        except anthropic.APIConnectionError:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(1 * (2 ** attempt))
+
+    # Parse response
+    result = {
+        "content": "",
+        "tool_calls": [],
+        "stop_reason": response.stop_reason,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+    }
+
+    for block in response.content:
+        if block.type == "text":
+            result["content"] += block.text
+        elif block.type == "tool_use":
+            result["tool_calls"].append({
+                "id": block.id,
+                "name": block.name,
+                "args": block.input,
+            })
+
+    # If output_schema is provided, parse the response
+    if output_schema:
+        try:
+            # Try to parse JSON from the response
+            text = result["content"]
+            # Handle markdown code blocks
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0].strip()
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0].strip()
+
+            data = json.loads(text)
+            return output_schema(**data)
+        except (json.JSONDecodeError, ValueError) as e:
+            # Return None if parsing fails - let caller handle it
+            print(f"Warning: Failed to parse structured output: {e}")
+            return None
+
+    return result
+
+
+def call_llm_with_tools(
+    messages: List[Dict[str, Any]],
+    tools: List[Any],
+    model: str = "claude-sonnet-4.5",
+    system_prompt: Optional[str] = None,
+    max_tokens: int = 4096,
+) -> Dict[str, Any]:
+    """
+    Call Claude with a conversation history and tools.
+    This is the primary function for the event loop pattern.
+
+    Args:
+        messages: List of message dicts with 'role' and 'content'
+        tools: List of tool definitions
+        model: Model name
+        system_prompt: System prompt
+        max_tokens: Max tokens for response
+
+    Returns:
+        Dict with content, tool_calls, stop_reason, usage
+    """
+    client = get_client()
+    final_system_prompt = system_prompt if system_prompt else DEFAULT_SYSTEM_PROMPT
+    anthropic_model = MODEL_MAPPING.get(model, "claude-sonnet-4-5-20250929")
+
+    api_kwargs = {
+        "model": anthropic_model,
+        "max_tokens": max_tokens,
+        "system": final_system_prompt,
+        "messages": messages,
+        "tools": convert_tools_to_anthropic_format(tools),
+    }
+
+    # Retry logic
+    max_retries = 6
+    for attempt in range(max_retries):
+        try:
+            response = client.messages.create(**api_kwargs)
+            break
+        except anthropic.RateLimitError:
+            if attempt == max_retries - 1:
+                raise
+            wait_time = 10 * (2 ** attempt)
+            print(f"Rate limit hit. Waiting {wait_time}s before retry...")
+            time.sleep(wait_time)
+        except anthropic.APIConnectionError:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(1 * (2 ** attempt))
+
+    # Parse response
+    result = {
+        "content": "",
+        "tool_calls": [],
+        "stop_reason": response.stop_reason,
+        "usage": {
+            "input_tokens": response.usage.input_tokens,
+            "output_tokens": response.usage.output_tokens,
+        }
+    }
+
+    for block in response.content:
+        if block.type == "text":
+            result["content"] += block.text
+        elif block.type == "tool_use":
+            result["tool_calls"].append({
+                "id": block.id,
+                "name": block.name,
+                "args": block.input,
+            })
+
+    return result

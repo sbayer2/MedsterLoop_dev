@@ -1,5 +1,5 @@
 # Medical tools for Medster clinical analysis agent
-from typing import Callable
+from typing import Callable, Any, Dict, Optional
 
 # Import medical data retrieval tools
 from medster.tools.medical.patient_data import (
@@ -84,3 +84,56 @@ TOOLS: list[Callable[..., any]] = [
     analyze_patient_ecg,  # Simple: takes patient_id, loads ECG internally
     analyze_medical_images,  # Advanced: takes raw base64 image data
 ]
+
+
+# ============================================================================
+# Tool Execution Utilities - For Single-Turn Architecture
+# ============================================================================
+
+def get_tool_by_name(name: str) -> Optional[Callable]:
+    """
+    Get a tool function by its name.
+
+    Args:
+        name: The tool name (e.g., 'get_patient_labs', 'get_vital_signs')
+
+    Returns:
+        The tool function if found, None otherwise
+    """
+    for tool in TOOLS:
+        if hasattr(tool, 'name') and tool.name == name:
+            return tool
+        elif hasattr(tool, '__name__') and tool.__name__ == name:
+            return tool
+    return None
+
+
+def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> Any:
+    """
+    Execute a tool by name with the given arguments.
+
+    This function handles both LangChain-style tools (with .invoke()) and
+    regular Python functions.
+
+    Args:
+        tool_name: Name of the tool to execute
+        tool_args: Dictionary of arguments to pass to the tool
+
+    Returns:
+        The result of the tool execution
+
+    Raises:
+        ValueError: If tool is not found
+        Exception: Any exception raised by the tool itself
+    """
+    tool = get_tool_by_name(tool_name)
+
+    if tool is None:
+        raise ValueError(f"Tool '{tool_name}' not found in available tools")
+
+    # LangChain tools have an invoke() method
+    if hasattr(tool, 'invoke'):
+        return tool.invoke(tool_args)
+
+    # Regular Python functions - call directly with kwargs
+    return tool(**tool_args)

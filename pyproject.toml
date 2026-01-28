@@ -1,18 +1,18 @@
 [project]
-name = "medster"
-version = "0.1.0"
-description = "Autonomous Clinical Case Analysis Agent"
+name = "medster-loop"
+version = "0.2.0"
+description = "Autonomous Clinical Case Analysis Agent - Single-Turn Tool Call Architecture"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 authors = [
     { name = "Your Name", email = "your.email@example.com" }
 ]
-keywords = ["medical", "clinical", "agent", "ai", "langchain", "healthcare"]
+keywords = ["medical", "clinical", "agent", "ai", "anthropic", "healthcare"]
 
 dependencies = [
-    "langchain>=0.3.0",
-    "langchain-anthropic>=1.1.0",
+    "anthropic>=0.40.0",
+    "langchain>=0.3.0",  # Kept for @tool decorator compatibility
     "pydantic>=2.0.0",
     "python-dotenv>=1.0.0",
     "prompt-toolkit>=3.0.0",
