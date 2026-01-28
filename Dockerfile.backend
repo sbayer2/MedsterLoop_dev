@@ -1,0 +1,29 @@
+FROM python:3.10-slim
+
+WORKDIR /app
+
+# Install uv via pip (more reliable than ghcr.io in Cloud Build)
+RUN pip install --no-cache-dir uv
+
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install dependencies
+RUN uv sync --frozen --no-install-project
+
+# Copy source code only (NO coherent_data - loaded from GCS)
+COPY src ./src
+COPY README.md ./README.md
+
+# Install project
+RUN uv sync --frozen
+
+# Enable GCS for Coherent Data Set access
+ENV USE_GCS=true
+ENV GCS_COHERENT_BUCKET=medster-coherent-data
+
+# Expose port
+EXPOSE 8000
+
+# Run the application
+CMD ["uv", "run", "uvicorn", "medster.api:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,39 @@
+# .gcloudignore
+# Explicitly control what gets uploaded to Cloud Build
+# This overrides .gitignore
+
+# Git metadata
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.pyc
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Frontend node_modules (rebuilt in Docker)
+frontend/node_modules/
+frontend/.next/
+
+# Reference code
+dexter-reference/
+
+# CRITICAL: Exclude coherent_data - now served from GCS bucket
+# gs://medster-coherent-data contains all FHIR, DICOM, CSV, DNA data
+coherent_data/
+
+# Documentation (not needed for runtime)
+docs/
+CLAUDE.md
+CHANGELOG.md
+MCP_*.md
+
+# FORCE include README.md (required by pyproject.toml/hatchling)
+!README.md

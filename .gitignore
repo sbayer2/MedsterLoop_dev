@@ -1,0 +1,76 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# Node.js
+node_modules/
+.next/
+.turbo/
+*.tsbuildinfo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment variables (contains API keys)
+.env
+.env.local
+.env.*.local
+!env.example
+
+# Coherent Data Set (9GB - too large for GitHub)
+coherent_data/
+
+# Logs
+*.log
+logs/
+mcp_debug.log
+
+# Test coverage
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Claude Code local settings
+.claude/
+
+# Session summaries (internal working docs)
+SESSION_SUMMARY.md
+MCP_DEBUGGING_SESSION_SUMMARY.md
+
+# Reference repositories (acknowledged in README)
+dexter-reference/
+
+# Documentation (keep source code focused)
+docs/
